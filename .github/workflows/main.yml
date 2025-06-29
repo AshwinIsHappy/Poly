@@ -36,7 +36,7 @@ jobs:
           import chess.pgn
           INPUT_PGN = "book/best_games.pgn"
           OUTPUT_PGN = "book/best_decisive_games.pgn"
-          MIN_MOVES = 30
+          MIN_MOVES = 20          # Lowered from 30 to 20
           MIN_ELO = 2500
 
           def is_best_game(game):
