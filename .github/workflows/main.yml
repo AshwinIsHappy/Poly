@@ -1,0 +1,109 @@
+name: Build Extremely Powerful Polyglot Book
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-extreme-book:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Download TCEC Engine PGN
+        run: |
+          mkdir -p book
+          curl -L "https://tcec-chess.com/archive.html" | grep -oP 'href="\K(.*?\.pgn)' | grep -i 'tcec' | head -n 1 | xargs -I{} curl -L "https://tcec-chess.com/{}" -o book/tcec_games.pgn || true
+
+      - name: Install required tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y polyglot python3 python3-pip
+          pip3 install python-chess tqdm
+
+      - name: Filter PGN for high win rate openings
+        run: |
+          python3 - <<'EOF'
+          import chess.pgn
+          from collections import defaultdict, Counter
+          import sys
+
+          # Configurable parameters
+          WINRATE_THRESHOLD = 0.6  # 60%
+          MAX_PLY = 100
+          INPUT_PGN = "book/tcec_games.pgn"
+          OUTPUT_PGN = "book/high_winrate_games.pgn"
+
+          # First pass: build stats for all lines
+          line_results = defaultdict(Counter)
+          total_games = 0
+
+          with open(INPUT_PGN, "r", encoding="utf-8", errors="ignore") as pgn:
+              while True:
+                  game = chess.pgn.read_game(pgn)
+                  if game is None:
+                      break
+                  total_games += 1
+                  result = game.headers.get("Result")
+                  node = game
+                  moves = []
+                  ply = 0
+                  while node.variations and ply < MAX_PLY:
+                      node = node.variation(0)
+                      move_uci = node.move.uci()
+                      moves.append(move_uci)
+                      ply += 1
+                      line_results[tuple(moves)][result] += 1
+
+          # Build set of strong lines (for either White or Black)
+          strong_lines = set()
+          for moves, results in line_results.items():
+              total = sum(results.values())
+              if total < 10:  # skip rarely played lines
+                  continue
+              white_winrate = results["1-0"] / total if total > 0 else 0
+              black_winrate = results["0-1"] / total if total > 0 else 0
+              if white_winrate >= WINRATE_THRESHOLD or black_winrate >= WINRATE_THRESHOLD:
+                  strong_lines.add(moves)
+
+          # Utility: check if the moves of a game match any strong line prefix
+          def has_strong_line(game):
+              node = game
+              moves = []
+              ply = 0
+              while node.variations and ply < MAX_PLY:
+                  node = node.variation(0)
+                  moves.append(node.move.uci())
+                  ply += 1
+                  if tuple(moves) in strong_lines:
+                      return True
+              return False
+
+          # Second pass: filter games
+          with open(INPUT_PGN, "r", encoding="utf-8", errors="ignore") as pgn, \
+               open(OUTPUT_PGN, "w", encoding="utf-8") as outpgn:
+              while True:
+                  game = chess.pgn.read_game(pgn)
+                  if game is None:
+                      break
+                  if has_strong_line(game):
+                      outpgn.write(str(game) + "\n\n")
+          EOF
+
+      - name: Generate Polyglot .bin book (up to move 50)
+        run: |
+          polyglot make-book \
+            -pgn book/high_winrate_games.pgn \
+            -bin book/super_book.bin \
+            -min-game 1 \
+            -max-ply 100 \
+            -quiet
+
+      - name: Commit and push .bin to repository
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add book/super_book.bin
+          git commit -m "Update extremely strong Polyglot book (high win rate lines, up to move 50)" || echo "No changes to commit"
+          git push
