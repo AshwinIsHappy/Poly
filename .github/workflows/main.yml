@@ -1,20 +1,33 @@
-name: Build Extremely Powerful Polyglot Book
+name: Build Polyglot Book from Best Games in the World
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-extreme-book:
+  build-best-book:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Download TCEC Engine PGN
+      # Download best games PGN from multiple valid ChessDB URLs
+      - name: Download Best Games PGNs
         run: |
           mkdir -p book
-          curl -L "https://tcec-chess.com/archive.html" | grep -oP 'href="\K(.*?\.pgn)' | grep -i 'tcec' | head -n 1 | xargs -I{} curl -L "https://tcec-chess.com/{}" -o book/tcec_games.pgn || true
+          # World Champions
+          curl -L "https://www.chessdb.cn/down/pgn/worldchamp.pgn" -o book/worldchamp.pgn
+          # SuperGM games
+          curl -L "https://www.chessdb.cn/down/pgn/supergm.pgn" -o book/supergm.pgn
+          # Linares tournament (elite event)
+          curl -L "https://www.chessdb.cn/down/pgn/linares.pgn" -o book/linares.pgn
+          # Candidates tournaments
+          curl -L "https://www.chessdb.cn/down/pgn/candidates.pgn" -o book/candidates.pgn
+          # Top all games
+          curl -L "https://www.chessdb.cn/down/pgn/topall.pgn" -o book/topall.pgn
+          # Combine all PGNs into one
+          cat book/worldchamp.pgn book/supergm.pgn book/linares.pgn book/candidates.pgn book/topall.pgn > book/best_games.pgn
+          ls -lh book/
 
       - name: Install required tools
         run: |
@@ -22,80 +35,52 @@ jobs:
           sudo apt-get install -y polyglot python3 python3-pip
           pip3 install python-chess tqdm
 
-      - name: Filter PGN for high win rate openings
+      # Filter for decisive, high-quality games only (e.g. >30 moves, not draws, both sides 2500+)
+      - name: Filter PGN for best decisive games
         run: |
           python3 - <<'EOF'
           import chess.pgn
-          from collections import defaultdict, Counter
-          import sys
 
-          # Configurable parameters
-          WINRATE_THRESHOLD = 0.6  # 60%
-          MAX_PLY = 100
-          INPUT_PGN = "book/tcec_games.pgn"
-          OUTPUT_PGN = "book/high_winrate_games.pgn"
+          INPUT_PGN = "book/best_games.pgn"
+          OUTPUT_PGN = "book/best_decisive_games.pgn"
+          MIN_MOVES = 30
+          MIN_ELO = 2500
 
-          # First pass: build stats for all lines
-          line_results = defaultdict(Counter)
-          total_games = 0
-
-          with open(INPUT_PGN, "r", encoding="utf-8", errors="ignore") as pgn:
-              while True:
-                  game = chess.pgn.read_game(pgn)
-                  if game is None:
-                      break
-                  total_games += 1
-                  result = game.headers.get("Result")
-                  node = game
-                  moves = []
-                  ply = 0
-                  while node.variations and ply < MAX_PLY:
-                      node = node.variation(0)
-                      move_uci = node.move.uci()
-                      moves.append(move_uci)
-                      ply += 1
-                      line_results[tuple(moves)][result] += 1
-
-          # Build set of strong lines (for either White or Black)
-          strong_lines = set()
-          for moves, results in line_results.items():
-              total = sum(results.values())
-              if total < 10:  # skip rarely played lines
-                  continue
-              white_winrate = results["1-0"] / total if total > 0 else 0
-              black_winrate = results["0-1"] / total if total > 0 else 0
-              if white_winrate >= WINRATE_THRESHOLD or black_winrate >= WINRATE_THRESHOLD:
-                  strong_lines.add(moves)
-
-          # Utility: check if the moves of a game match any strong line prefix
-          def has_strong_line(game):
+          def is_best_game(game):
+              try:
+                  white_elo = int(game.headers.get("WhiteElo", "0"))
+                  black_elo = int(game.headers.get("BlackElo", "0"))
+              except Exception:
+                  white_elo = black_elo = 0
+              result = game.headers.get("Result", "")
+              if result not in ["1-0", "0-1"]:
+                  return False
+              if white_elo < MIN_ELO or black_elo < MIN_ELO:
+                  return False
+              moves = 0
               node = game
-              moves = []
-              ply = 0
-              while node.variations and ply < MAX_PLY:
+              while node.variations:
                   node = node.variation(0)
-                  moves.append(node.move.uci())
-                  ply += 1
-                  if tuple(moves) in strong_lines:
-                      return True
-              return False
+                  moves += 1
+              if moves < MIN_MOVES:
+                  return False
+              return True
 
-          # Second pass: filter games
-          with open(INPUT_PGN, "r", encoding="utf-8", errors="ignore") as pgn, \
-               open(OUTPUT_PGN, "w", encoding="utf-8") as outpgn:
+          with open(INPUT_PGN, "r", encoding="utf-8", errors="ignore") as inp, \
+               open(OUTPUT_PGN, "w", encoding="utf-8") as outp:
               while True:
-                  game = chess.pgn.read_game(pgn)
+                  game = chess.pgn.read_game(inp)
                   if game is None:
                       break
-                  if has_strong_line(game):
-                      outpgn.write(str(game) + "\n\n")
+                  if is_best_game(game):
+                      outp.write(str(game) + "\n\n")
           EOF
 
       - name: Generate Polyglot .bin book (up to move 50)
         run: |
           polyglot make-book \
-            -pgn book/high_winrate_games.pgn \
-            -bin book/super_book.bin \
+            -pgn book/best_decisive_games.pgn \
+            -bin book/world_best_book.bin \
             -min-game 1 \
             -max-ply 100 \
             -quiet
@@ -104,6 +89,6 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add book/super_book.bin
-          git commit -m "Update extremely strong Polyglot book (high win rate lines, up to move 50)" || echo "No changes to commit"
+          git add book/world_best_book.bin
+          git commit -m "Update Polyglot book from world's best games (decisive, top Elo, up to move 50, multi-URL)" || echo "No changes to commit"
           git push
