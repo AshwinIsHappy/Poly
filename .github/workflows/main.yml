@@ -82,8 +82,7 @@ jobs:
             -pgn book/best_decisive_games.pgn \
             -bin book/world_best_book.bin \
             -min-game 1 \
-            -max-ply 100 \
-            -quiet
+            -max-ply 100
           ls -lh book/
 
       - name: Commit and push .bin to repository (if missing, create and add)
@@ -94,8 +93,7 @@ jobs:
               -pgn book/best_decisive_games.pgn \
               -bin book/world_best_book.bin \
               -min-game 1 \
-              -max-ply 100 \
-              -quiet
+              -max-ply 100
           fi
 
           if [ -f book/world_best_book.bin ]; then
